@@ -1,0 +1,15 @@
+{
+  "name": "ResumeAI — Free Resume Builder",
+  "short_name": "ResumeAI",
+  "description": "Build a professional AI-powered resume for free. No watermarks, no paywalls.",
+  "start_url": "/en/builder",
+  "display": "standalone",
+  "background_color": "#2E86AB",
+  "theme_color": "#2E86AB",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ],
+  "categories": ["productivity", "utilities"],
+  "screenshots": []
+}
