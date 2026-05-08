@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { parseResumeWithAI } from "@/lib/ai-resume-parser";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -333,7 +334,7 @@ export async function POST(req: NextRequest) {
     const bytes = await file.arrayBuffer();
     const buffer = Buffer.from(bytes);
 
-    // Detect type by magic bytes + extension
+    // ── Step 1: Extract raw text from file ──────────────────────────────────
     const isPDF = ext === "pdf" || buffer.slice(0, 4).toString("ascii") === "%PDF";
     const isDOCX = ext === "docx" || (buffer[0] === 0x50 && buffer[1] === 0x4b);
     const isDOC = ext === "doc" || (buffer[0] === 0xd0 && buffer[1] === 0xcf);
@@ -342,30 +343,83 @@ export async function POST(req: NextRequest) {
     if (isPDF) rawText = await extractPDF(buffer);
     else if (isDOCX) rawText = await extractDOCX(buffer);
     else if (isDOC) rawText = extractDOC(buffer);
-    else rawText = buffer.toString("utf-8"); // TXT fallback
+    else rawText = buffer.toString("utf-8");
 
     rawText = cleanText(rawText);
-    console.log(`Extracted ${rawText.length} chars from ${filename} (isPDF=${isPDF} isDOCX=${isDOCX})`);
+    console.log(`Extracted ${rawText.length} chars from ${filename}`);
 
-    const parsed = simpleParser(rawText, filename);
+    // ── Step 2: AI-powered parsing (Gemini → Groq → regex fallback) ─────────
+    const aiResult = await parseResumeWithAI(rawText);
+    console.log(`[parse-resume] Provider: ${aiResult.provider}, Accuracy: ${aiResult.parseAccuracy}%`);
 
-    // Always include first 2000 chars of raw text for UI preview
+    // ── Step 3: Convert AI output to ParsedResume schema ────────────────────
+    const id = Math.random().toString(36).substring(2, 10);
+    const ai = aiResult.data;
+
+    const parsed = {
+      id,
+      filename,
+      parsedAt: new Date().toISOString(),
+      parseAccuracy: aiResult.parseAccuracy,
+      provider: aiResult.provider,
+      warnings: rawText.length < 100 ? ["⚠️ Very little text extracted — result may be incomplete"] : [],
+      personal: {
+        name: ai.personal.name,
+        email: ai.personal.email,
+        phone: ai.personal.phone,
+        linkedin: ai.personal.linkedin,
+        location: ai.personal.location,
+        portfolio: ai.personal.portfolio,
+        jobTitle: ai.personal.jobTitle,
+      },
+      summary: ai.summary,
+      experience: ai.experience.map((e) => ({
+        company: e.company,
+        title: e.title,
+        location: e.location,
+        startDate: e.startDate,
+        endDate: e.endDate,
+        current: e.current,
+        bullets: e.bullets.filter(Boolean),
+      })),
+      education: ai.education,
+      skills: ai.skills,
+      certifications: ai.certifications,
+    };
+
     const rawPreview = rawText.substring(0, 2000);
 
     return NextResponse.json({
       success: true,
       data: parsed,
       rawPreview,
-      meta: { textLength: rawText.length, isLowQuality: rawText.length < 100 },
+      meta: {
+        textLength: rawText.length,
+        isLowQuality: rawText.length < 100,
+        provider: aiResult.provider,
+        parseAccuracy: aiResult.parseAccuracy,
+      },
     });
   } catch (err) {
     console.error("parse-resume critical:", err);
-    // Always return success with empty data — never block the user
     return NextResponse.json({
       success: true,
-      data: simpleParser("", filename),
+      data: {
+        id: Math.random().toString(36).substring(2, 10),
+        filename,
+        parsedAt: new Date().toISOString(),
+        parseAccuracy: 0,
+        provider: "error",
+        warnings: ["⚠️ Parsing failed — please fill in your details manually"],
+        personal: { name: "", email: "", phone: "", linkedin: "", location: "", portfolio: "", jobTitle: "" },
+        summary: "",
+        experience: [],
+        education: [],
+        skills: [],
+        certifications: [],
+      },
       rawPreview: "",
-      meta: { textLength: 0, isLowQuality: true },
+      meta: { textLength: 0, isLowQuality: true, provider: "error", parseAccuracy: 0 },
     });
   }
 }

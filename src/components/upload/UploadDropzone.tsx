@@ -1,12 +1,19 @@
 "use client";
-import { useCallback, useState } from "react";
+import { useCallback, useState, useEffect } from "react";
 import { useDropzone } from "react-dropzone";
 import { motion, AnimatePresence } from "framer-motion";
-import { Upload, FileText, AlertCircle, CheckCircle, X } from "lucide-react";
+import { Upload, AlertCircle, CheckCircle, X, Sparkles, Cpu, Zap } from "lucide-react";
 
 interface UploadDropzoneProps {
   onFileAccepted: (file: File) => void;
   disabled?: boolean;
+}
+
+interface AIStatus {
+  provider: "gemini" | "groq" | "regex";
+  accuracy: number;
+  label: string;
+  description: string;
 }
 
 const ACCEPTED_TYPES = {
@@ -26,9 +33,23 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }
 
+const PROVIDER_CONFIG = {
+  gemini: { icon: Sparkles, color: "#4285F4", bg: "rgba(66,133,244,0.1)", badge: "⚡ Gemini AI" },
+  groq:   { icon: Zap,       color: "#F55036", bg: "rgba(245,80,54,0.1)",  badge: "🔥 Groq AI" },
+  regex:  { icon: Cpu,       color: "#6B7280", bg: "rgba(107,114,128,0.1)", badge: "🔧 Basic Parser" },
+};
+
 export default function UploadDropzone({ onFileAccepted, disabled }: UploadDropzoneProps) {
   const [droppedFile, setDroppedFile] = useState<File | null>(null);
   const [error, setError] = useState<string>("");
+  const [aiStatus, setAiStatus] = useState<AIStatus | null>(null);
+
+  useEffect(() => {
+    fetch("/api/ai-status")
+      .then((r) => r.json())
+      .then(setAiStatus)
+      .catch(() => null);
+  }, []);
 
   const onDrop = useCallback(
     (accepted: File[], rejected: { file: File; errors: { message: string }[] }[]) => {
@@ -48,18 +69,41 @@ export default function UploadDropzone({ onFileAccepted, disabled }: UploadDropz
   );
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
-    onDrop,
-    accept: ACCEPTED_TYPES,
-    maxFiles: 1,
-    maxSize: 5 * 1024 * 1024,
-    disabled,
+    onDrop, accept: ACCEPTED_TYPES, maxFiles: 1, maxSize: 5 * 1024 * 1024, disabled,
   });
 
   const fileExt = droppedFile?.name.split(".").pop()?.toLowerCase() || "";
   const fileIcon = FILE_ICONS[fileExt] || "📄";
+  const provider = aiStatus?.provider || "regex";
+  const providerCfg = PROVIDER_CONFIG[provider];
+  const ProviderIcon = providerCfg.icon;
 
   return (
     <div className="w-full">
+      {/* AI Provider Badge */}
+      {aiStatus && (
+        <motion.div
+          initial={{ opacity: 0, y: -8 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="flex items-center justify-between mb-3 px-4 py-2.5 rounded-2xl border"
+          style={{ background: providerCfg.bg, borderColor: `${providerCfg.color}40` }}
+        >
+          <div className="flex items-center gap-2.5">
+            <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: providerCfg.color }}>
+              <ProviderIcon className="w-4 h-4 text-white" />
+            </div>
+            <div>
+              <p className="text-xs font-bold" style={{ color: providerCfg.color }}>{providerCfg.badge}</p>
+              <p className="text-xs text-gray-500">{aiStatus.description}</p>
+            </div>
+          </div>
+          <div className="text-right">
+            <p className="text-sm font-black" style={{ color: providerCfg.color }}>{aiStatus.accuracy}%</p>
+            <p className="text-xs text-gray-400">accuracy</p>
+          </div>
+        </motion.div>
+      )}
+
       <div
         {...getRootProps()}
         className={`
@@ -93,7 +137,10 @@ export default function UploadDropzone({ onFileAccepted, disabled }: UploadDropz
               </div>
               <div className="flex items-center gap-2 text-success font-semibold">
                 <CheckCircle className="w-5 h-5" />
-                <span>File ready to parse</span>
+                <span>
+                  File ready — parsing with{" "}
+                  <span style={{ color: providerCfg.color }}>{aiStatus?.label || "AI"}</span>
+                </span>
               </div>
               <button
                 onClick={(e) => { e.stopPropagation(); setDroppedFile(null); }}
@@ -153,8 +200,8 @@ export default function UploadDropzone({ onFileAccepted, disabled }: UploadDropz
               <div className="grid grid-cols-3 gap-4 mt-2 max-w-sm w-full">
                 {[
                   { icon: "🔒", label: "Private & Secure" },
-                  { icon: "⚡", label: "Instant Parse" },
-                  { icon: "✨", label: "AI-Enhanced Edit" },
+                  { icon: "⚡", label: "AI-Powered" },
+                  { icon: "✨", label: "Near 100% Accuracy" },
                 ].map((item) => (
                   <div key={item.label} className="text-center">
                     <div className="text-2xl mb-1">{item.icon}</div>
