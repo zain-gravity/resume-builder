@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { ChevronDown, ChevronUp, Sparkles, User, Briefcase, GraduationCap, Wrench, Award, FileText, LayoutTemplate, Eye, BarChart2, Palette } from "lucide-react";
+import { ChevronDown, ChevronUp, Sparkles, User, Briefcase, GraduationCap, Wrench, Award, FileText, LayoutTemplate, Eye, BarChart2, Palette, LayoutGrid } from "lucide-react";
 import { Toaster } from "sonner";
 import { useResumeStore } from "@/lib/store";
 import TemplateSwitcher from "@/components/builder/TemplateSwitcher";
@@ -18,19 +18,12 @@ import Link from "next/link";
 
 type SectionId = "personal" | "summary" | "experience" | "education" | "skills" | "certifications" | "score" | "grammar";
 
-const SECTIONS: { id: SectionId; label: string; icon: React.ElementType; emoji: string }[] = [
-  { id: "personal", label: "Personal Info", icon: User, emoji: "👤" },
-  { id: "summary", label: "Professional Summary", icon: FileText, emoji: "📋" },
-  { id: "experience", label: "Work Experience", icon: Briefcase, emoji: "💼" },
-  { id: "education", label: "Education", icon: GraduationCap, emoji: "🎓" },
-  { id: "skills", label: "Skills", icon: Wrench, emoji: "🛠️" },
-  { id: "certifications", label: "Certifications", icon: Award, emoji: "📜" },
-];
-
-function SectionPanel({ id, label, icon: Icon, emoji, children }: { id: SectionId; label: string; icon: React.ElementType; emoji: string; children: React.ReactNode }) {
-  const [open, setOpen] = useState(true);
+function SectionPanel({ label, icon: Icon, emoji, children, defaultOpen = true }: {
+  id?: SectionId; label: string; icon: React.ElementType; emoji: string; children: React.ReactNode; defaultOpen?: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
   return (
-    <div className="border border-gray-100 rounded-xl overflow-hidden bg-white">
+    <div className="border border-gray-100 rounded-xl overflow-hidden bg-white shadow-sm">
       <button
         onClick={() => setOpen(!open)}
         className="w-full flex items-center justify-between px-4 py-3.5 hover:bg-gray-50/50 transition-colors"
@@ -70,8 +63,8 @@ export default function BuilderPage({ params }: { params: { locale: string } }) 
   // Handle template from URL
   useEffect(() => {
     if (typeof window !== "undefined") {
-      const params = new URLSearchParams(window.location.search);
-      const t = params.get("template");
+      const urlParams = new URLSearchParams(window.location.search);
+      const t = urlParams.get("template");
       if (t) useResumeStore.getState().setTemplate(t);
     }
   }, []);
@@ -91,7 +84,7 @@ export default function BuilderPage({ params }: { params: { locale: string } }) 
     <div className="h-screen overflow-hidden bg-gray-50 flex flex-col">
       <Toaster position="top-right" richColors />
 
-      {/* Top Bar */}
+      {/* ── Top Bar ─────────────────────────────────────────────────────────── */}
       <div className="bg-white border-b border-gray-100 px-4 py-3 flex items-center justify-between shrink-0 z-30">
         <Link href={`/${locale}`} className="flex items-center gap-2">
           <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: "linear-gradient(135deg, #2E86AB, #A23B72)" }}>
@@ -125,50 +118,70 @@ export default function BuilderPage({ params }: { params: { locale: string } }) 
         </div>
       </div>
 
-      {/* Main Layout */}
+      {/* ── Main Layout ──────────────────────────────────────────────────────── */}
       <div className="flex flex-1 overflow-hidden">
-        {/* LEFT: Editor */}
+
+        {/* LEFT: Editor — fully scrollable, nothing fixed above form */}
         <div className={`w-full md:w-[55%] lg:w-[50%] flex flex-col border-r border-gray-100 ${mobileTab === "preview" ? "hidden md:flex" : "flex"}`}>
-          <CategorySelector />
-          <TemplateSwitcher />
-          <StyleCustomizer style={resumeStyle} onChange={setResumeStyle} />
-          <RoleAutoFill />
+
+          {/* Scrollable area contains EVERYTHING including templates */}
           <div className="flex-1 overflow-y-auto">
             <div className="p-4 space-y-3 pb-32">
+
+              {/* ── Template & Style Panel (collapsible, default collapsed) ── */}
+              <SectionPanel id="personal" label="Template & Style" icon={LayoutGrid} emoji="🎨" defaultOpen={false}>
+                <div className="space-y-0 divide-y divide-gray-50">
+                  <CategorySelector />
+                  <TemplateSwitcher />
+                  <StyleCustomizer style={resumeStyle} onChange={setResumeStyle} />
+                  <RoleAutoFill />
+                </div>
+              </SectionPanel>
+
+              {/* ── Resume Content Sections ── */}
               <SectionPanel id="personal" label="Personal Info" icon={User} emoji="👤">
                 <PersonalInfoForm />
               </SectionPanel>
+
               <SectionPanel id="summary" label="Professional Summary" icon={FileText} emoji="📋">
                 <SummaryForm />
               </SectionPanel>
+
               <SectionPanel id="experience" label="Work Experience" icon={Briefcase} emoji="💼">
                 <WorkExperienceForm />
               </SectionPanel>
+
               <SectionPanel id="education" label="Education" icon={GraduationCap} emoji="🎓">
                 <EducationForm />
               </SectionPanel>
+
               <SectionPanel id="skills" label="Skills" icon={Wrench} emoji="🛠️">
                 <SkillsForm />
               </SectionPanel>
+
               <SectionPanel id="certifications" label="Certifications" icon={Award} emoji="📜">
                 <CertificationsForm />
               </SectionPanel>
-              <SectionPanel id="score" label="Resume Score Card" icon={BarChart2} emoji="📊">
+
+              <SectionPanel id="score" label="Resume Score Card" icon={BarChart2} emoji="📊" defaultOpen={false}>
                 <ScoreCard />
               </SectionPanel>
-              <SectionPanel id="grammar" label="Grammar & Tone Check" icon={Palette} emoji="✍️">
+
+              <SectionPanel id="grammar" label="Grammar & Tone Check" icon={Palette} emoji="✍️" defaultOpen={false}>
                 <GrammarChecker />
               </SectionPanel>
+
               <SalaryInsights locale={locale} />
             </div>
           </div>
+
           {/* Sticky Action Bar */}
-          <div className="sticky bottom-0">
+          <div className="sticky bottom-0 shrink-0">
             <ActionBar />
           </div>
         </div>
 
-        {/* RIGHT: Live Preview — h-full fills the flex container, never scrolls with the page */}
+        {/* RIGHT: Live Preview */}
         <div className={`w-full md:w-[45%] lg:w-[50%] h-full ${mobileTab === "editor" ? "hidden md:block" : "block"}`}>
           <LivePreview />
         </div>

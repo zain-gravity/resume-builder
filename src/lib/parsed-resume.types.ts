@@ -35,6 +35,7 @@ export interface ParsedResume {
   filename: string;
   parsedAt: string;
   parseAccuracy: number;
+  provider?: string; // "gemini" | "groq" | "regex" | "error"
   warnings: string[];
   personal: ParsedPersonal;
   summary: string;
@@ -51,9 +52,9 @@ export interface ParseProgress {
 }
 
 export const PARSE_STEPS = [
-  { step: 0, label: "📤 Uploading file…",              percent: 10 },
-  { step: 1, label: "📄 Extracting text layers…",       percent: 40 },
-  { step: 2, label: "🧹 Cleaning & normalizing…",       percent: 60 },
-  { step: 3, label: "🔍 Parsing experience & education…", percent: 85 },
-  { step: 4, label: "🛠️ Identifying skills…",            percent: 95 },
+  { step: 0, label: "📤 Uploading file…",               percent: 10 },
+  { step: 1, label: "📄 Extracting text from file…",    percent: 35 },
+  { step: 2, label: "🤖 Running AI parser…",             percent: 65 },
+  { step: 3, label: "🔍 Extracting fields & experience…", percent: 85 },
+  { step: 4, label: "✨ Finalizing results…",            percent: 95 },
 ];
