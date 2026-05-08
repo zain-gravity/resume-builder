@@ -1,19 +1,17 @@
 import type { Metadata } from "next";
 import { NextIntlClientProvider } from "next-intl";
 import { getMessages } from "next-intl/server";
-import { setRequestLocale } from "next-intl/server";
 import { notFound } from "next/navigation";
 import { locales } from "@/i18n/routing";
 import "@/app/globals.css";
+
+// Force dynamic rendering for all locale routes — prevents next-intl prerender errors on Vercel
+export const dynamic = "force-dynamic";
 
 type Props = {
   children: React.ReactNode;
   params: Promise<{ locale: string }>;
 };
-
-export function generateStaticParams() {
-  return locales.map((locale) => ({ locale }));
-}
 
 export const metadata: Metadata = {
   title: { default: "ResumeAI — Free AI Resume Builder", template: "%s | ResumeAI" },
@@ -37,9 +35,6 @@ export default async function LocaleLayout({ children, params }: Props) {
     notFound();
   }
 
-  // Enable static rendering for next-intl (required for Vercel deployment)
-  setRequestLocale(locale);
-
   const messages = await getMessages();
 
   return (
@@ -57,3 +52,4 @@ export default async function LocaleLayout({ children, params }: Props) {
     </html>
   );
 }
+
