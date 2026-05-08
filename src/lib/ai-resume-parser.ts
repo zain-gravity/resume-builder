@@ -46,51 +46,138 @@ RESUME:
 ${text.slice(0, 28000)}`;
 }
 
-// ─── GEMINI 1.5 FLASH ─────────────────────────────────────────────────────────
-
-async function parseWithGemini(text: string, key: string): Promise<AIParsedResume> {
-  const r = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${key}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: buildPrompt(text) }] }],
-        generationConfig: { responseMimeType: "application/json", temperature: 0.05, maxOutputTokens: 4096 },
-      }),
-      signal: AbortSignal.timeout(25000),
-    }
-  );
-  if (!r.ok) throw new Error(`Gemini ${r.status}: ${(await r.text()).slice(0, 200)}`);
-  const d = await r.json();
-  const raw = d?.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!raw) throw new Error("Gemini empty response");
-  return JSON.parse(raw);
-}
-
-// ─── GROQ LLAMA ───────────────────────────────────────────────────────────────
+// ─── GROQ (Primary — Fastest, Truly Free, No Billing Needed) ─────────────────
+// Free: 14,400 req/day, 6,000 tokens/min | Get key: console.groq.com/keys
 
 async function parseWithGroq(text: string, key: string): Promise<AIParsedResume> {
-  const r = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
-    body: JSON.stringify({
-      model: "llama-3.1-8b-instant",
-      messages: [
-        { role: "system", content: "Expert resume parser. Return only valid JSON, no markdown." },
-        { role: "user", content: buildPrompt(text) },
-      ],
-      temperature: 0.05, max_tokens: 4096,
-      response_format: { type: "json_object" },
-    }),
-    signal: AbortSignal.timeout(25000),
-  });
-  if (!r.ok) throw new Error(`Groq ${r.status}: ${(await r.text()).slice(0, 200)}`);
-  const d = await r.json();
-  const raw = d?.choices?.[0]?.message?.content;
-  if (!raw) throw new Error("Groq empty response");
-  return JSON.parse(raw);
+  // Try models in order: fastest first
+  const models = [
+    "llama-3.1-8b-instant",   // Fastest, free
+    "llama3-8b-8192",         // Fallback
+    "mixtral-8x7b-32768",     // Larger context
+  ];
+
+  for (const model of models) {
+    try {
+      const r = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: "system", content: "Expert resume parser. Return only valid JSON, no markdown, no explanation." },
+            { role: "user", content: buildPrompt(text) },
+          ],
+          temperature: 0.05,
+          max_tokens: 4096,
+          response_format: { type: "json_object" },
+        }),
+        signal: AbortSignal.timeout(20000),
+      });
+
+      if (r.status === 429) { console.warn(`[AI] Groq ${model} rate limited, trying next...`); continue; }
+      if (!r.ok) throw new Error(`Groq ${model} ${r.status}: ${(await r.text()).slice(0, 200)}`);
+
+      const d = await r.json();
+      const raw = d?.choices?.[0]?.message?.content;
+      if (!raw) throw new Error(`Groq ${model} empty response`);
+      console.log(`[AI] Groq model used: ${model}`);
+      return JSON.parse(raw);
+    } catch (e) {
+      if (e instanceof Error && (e.message.includes("rate limited") || e.message.includes("429"))) continue;
+      throw e;
+    }
+  }
+  throw new Error("All Groq models failed");
 }
+
+// ─── OPENROUTER FREE MODELS (Secondary — No Billing, Multiple Models) ─────────
+// Free models tagged :free | Get key: openrouter.ai/keys
+
+async function parseWithOpenRouter(text: string, key: string): Promise<AIParsedResume> {
+  const models = [
+    "meta-llama/llama-3.1-8b-instruct:free",
+    "google/gemma-2-9b-it:free",
+    "mistralai/mistral-7b-instruct:free",
+  ];
+
+  for (const model of models) {
+    try {
+      const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${key}`,
+          "HTTP-Referer": "https://resume-builder-two-ashen-38.vercel.app",
+          "X-Title": "ResumeAI Parser",
+        },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: "system", content: "Expert resume parser. Return only valid JSON, no markdown." },
+            { role: "user", content: buildPrompt(text) },
+          ],
+          temperature: 0.05,
+          max_tokens: 4096,
+          response_format: { type: "json_object" },
+        }),
+        signal: AbortSignal.timeout(20000),
+      });
+
+      if (r.status === 429) { console.warn(`[AI] OpenRouter ${model} rate limited`); continue; }
+      if (!r.ok) throw new Error(`OpenRouter ${model} ${r.status}: ${(await r.text()).slice(0, 200)}`);
+
+      const d = await r.json();
+      const raw = d?.choices?.[0]?.message?.content;
+      if (!raw) throw new Error(`OpenRouter ${model} empty`);
+      console.log(`[AI] OpenRouter model used: ${model}`);
+      return JSON.parse(raw);
+    } catch (e) {
+      console.warn(`[AI] OpenRouter ${model} failed:`, e instanceof Error ? e.message : e);
+      continue;
+    }
+  }
+  throw new Error("All OpenRouter models failed");
+}
+
+// ─── GEMINI (Tertiary — Free via AI Studio, May Have Quota) ──────────────────
+// Free: 15 RPM, 1M tokens/day | Get key: aistudio.google.com/app/apikey
+
+async function parseWithGemini(text: string, key: string): Promise<AIParsedResume> {
+  const models = ["gemini-2.0-flash", "gemini-1.5-flash-latest", "gemini-2.0-flash-lite"];
+
+  for (const model of models) {
+    try {
+      const r = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: buildPrompt(text) }] }],
+            generationConfig: { responseMimeType: "application/json", temperature: 0.05, maxOutputTokens: 4096 },
+          }),
+          signal: AbortSignal.timeout(25000),
+        }
+      );
+      if (r.status === 404 || r.status === 429) {
+        console.warn(`[AI] Gemini ${model} returned ${r.status}, trying next...`);
+        continue;
+      }
+      if (!r.ok) throw new Error(`Gemini ${model} ${r.status}: ${(await r.text()).slice(0, 200)}`);
+      const d = await r.json();
+      const raw = d?.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!raw) throw new Error(`Gemini ${model} empty response`);
+      console.log(`[AI] Gemini model used: ${model}`);
+      return JSON.parse(raw);
+    } catch (e) {
+      if (e instanceof Error && (e.message.includes("404") || e.message.includes("429"))) continue;
+      throw e;
+    }
+  }
+  throw new Error("All Gemini models unavailable");
+}
+
 
 // ─── ULTRA-COMPREHENSIVE REGEX PARSER ─────────────────────────────────────────
 
@@ -404,19 +491,45 @@ function sanitize(p: AIParsedResume): AIParsedResume {
 
 export interface ParseResult {
   data: AIParsedResume;
-  provider: "gemini" | "groq" | "regex";
+  provider: "groq" | "openrouter" | "gemini" | "regex";
   parseAccuracy: number;
 }
 
 export async function parseResumeWithAI(resumeText: string): Promise<ParseResult> {
-  const geminiKey = process.env.GOOGLE_AI_API_KEY || process.env.GEMINI_API_KEY;
   const groqKey = process.env.GROQ_API_KEY;
+  const openRouterKey = process.env.OPENROUTER_API_KEY;
+  const geminiKey = process.env.GOOGLE_AI_API_KEY || process.env.GEMINI_API_KEY;
 
   if (resumeText.length > 10) {
-    // 1. Gemini Flash — free, most accurate
+
+    // 1. Groq — BEST: truly free, no billing, 14,400 req/day, 300+ tok/s
+    if (groqKey) {
+      try {
+        console.log("[AI] Groq (primary)...");
+        const data = sanitize(await parseWithGroq(resumeText, groqKey));
+        console.log(`[AI] Groq ✓ — "${data.personal.name}" | ${data.experience.length} jobs | ${data.skills.length} skills`);
+        return { data, provider: "groq", parseAccuracy: 95 };
+      } catch (e) {
+        console.warn("[AI] Groq failed:", e instanceof Error ? e.message : e);
+      }
+    }
+
+    // 2. OpenRouter — free models, no billing needed
+    if (openRouterKey) {
+      try {
+        console.log("[AI] OpenRouter free models...");
+        const data = sanitize(await parseWithOpenRouter(resumeText, openRouterKey));
+        console.log(`[AI] OpenRouter ✓ — "${data.personal.name}" | ${data.experience.length} jobs | ${data.skills.length} skills`);
+        return { data, provider: "openrouter", parseAccuracy: 92 };
+      } catch (e) {
+        console.warn("[AI] OpenRouter failed:", e instanceof Error ? e.message : e);
+      }
+    }
+
+    // 3. Gemini — free via AI Studio but has quota limits
     if (geminiKey) {
       try {
-        console.log("[AI] Gemini 1.5 Flash...");
+        console.log("[AI] Gemini (tertiary fallback)...");
         const data = sanitize(await parseWithGemini(resumeText, geminiKey));
         console.log(`[AI] Gemini ✓ — "${data.personal.name}" | ${data.experience.length} jobs | ${data.skills.length} skills`);
         return { data, provider: "gemini", parseAccuracy: 97 };
@@ -424,25 +537,13 @@ export async function parseResumeWithAI(resumeText: string): Promise<ParseResult
         console.warn("[AI] Gemini failed:", e instanceof Error ? e.message : e);
       }
     }
-
-    // 2. Groq — free, ultra-fast
-    if (groqKey) {
-      try {
-        console.log("[AI] Groq llama-3.1-8b-instant...");
-        const data = sanitize(await parseWithGroq(resumeText, groqKey));
-        console.log(`[AI] Groq ✓ — "${data.personal.name}" | ${data.experience.length} jobs | ${data.skills.length} skills`);
-        return { data, provider: "groq", parseAccuracy: 93 };
-      } catch (e) {
-        console.warn("[AI] Groq failed:", e instanceof Error ? e.message : e);
-      }
-    }
   }
 
-  // 3. Comprehensive regex NLP (no API key needed)
-  console.log("[AI] Regex NLP parser...");
+  // 4. Robust regex NLP — always works, zero dependencies
+  console.log("[AI] Regex NLP parser (no API key)...");
   const data = sanitize(parseWithRegex(resumeText));
-  const acc = [data.personal.name, data.personal.email, data.personal.phone].filter(Boolean).length;
-  const accuracy = Math.min(75, 35 + acc * 10 + (data.experience.length > 0 ? 10 : 0) + (data.skills.length > 3 ? 5 : 0));
+  const fieldCount = [data.personal.name, data.personal.email, data.personal.phone].filter(Boolean).length;
+  const accuracy = Math.min(75, 35 + fieldCount * 10 + (data.experience.length > 0 ? 10 : 0) + (data.skills.length > 3 ? 5 : 0));
   console.log(`[AI] Regex ✓ — "${data.personal.name}" | ${data.experience.length} jobs | ${data.skills.length} skills | acc=${accuracy}%`);
   return { data, provider: "regex", parseAccuracy: accuracy };
 }
