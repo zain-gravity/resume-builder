@@ -1,8 +1,9 @@
 import type { Metadata } from "next";
 import { NextIntlClientProvider } from "next-intl";
 import { getMessages } from "next-intl/server";
+import { setRequestLocale } from "next-intl/server";
 import { notFound } from "next/navigation";
-import { locales, defaultLocale } from "@/i18n/routing";
+import { locales } from "@/i18n/routing";
 import "@/app/globals.css";
 
 type Props = {
@@ -35,6 +36,9 @@ export default async function LocaleLayout({ children, params }: Props) {
   if (!locales.includes(locale as "en")) {
     notFound();
   }
+
+  // Enable static rendering for next-intl (required for Vercel deployment)
+  setRequestLocale(locale);
 
   const messages = await getMessages();
 
