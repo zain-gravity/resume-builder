@@ -38,10 +38,10 @@ export default function Navbar({ locale = "en" }: NavbarProps) {
     { href: `/${locale}/builder`, label: "Builder" },
     { href: `/${locale}/upload`, label: "📁 Upload" },
     { href: `/${locale}/linkedin`, label: "🔗 LinkedIn" },
+    { href: `/${locale}/pdf-editor`, label: "✏️ PDF Editor" },
     { href: `/${locale}/templates`, label: "Templates" },
     { href: `/${locale}/check`, label: "ATS Check" },
     { href: `/${locale}/jd-match`, label: "🎯 JD Match" },
-    { href: `/${locale}/interview-prep`, label: "🎓 Interview" },
     { href: `/${locale}/dashboard`, label: "Dashboard" },
   ];
 
