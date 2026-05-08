@@ -1,100 +1,108 @@
 import { NextRequest, NextResponse } from "next/server";
-import { parseResumeWithAI } from "@/lib/ai-resume-parser";
 
 export const runtime = "nodejs";
-export const maxDuration = 30;
+export const maxDuration = 60;
 
-function cleanText(raw: string): string {
-  return raw
-    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, " ")
-    .replace(/[\x80-\x9F]/g, " ")
-    .replace(/[^\x00-\x7F]{3,}/g, " ")
-    .replace(/[ \t]{3,}/g, " ")
-    .replace(/\n{4,}/g, "\n\n")
-    .trim();
+function buildPrompt(): string {
+  return `You are an expert ATS resume parser with 99% accuracy. Extract ALL information from this resume/LinkedIn profile PDF and return ONLY a valid JSON object. No markdown, no explanation.
+
+JSON schema:
+{
+  "personal": { "name":"","email":"","phone":"","location":"","linkedin":"","portfolio":"","jobTitle":"" },
+  "summary": "",
+  "experience": [{ "company":"","title":"","location":"","startDate":"YYYY-MM","endDate":"YYYY-MM or empty","current":false,"bullets":[] }],
+  "education": [{ "school":"","degree":"","field":"","location":"","startDate":"YYYY-MM","endDate":"YYYY-MM","gpa":"" }],
+  "skills": [],
+  "certifications": [{ "name":"","issuer":"","date":"YYYY-MM","url":"" }]
 }
 
-async function extractPDFText(buffer: Buffer): Promise<string> {
-  // Layer 1: pdf-parse (most reliable)
+RULES: Extract everything. Convert dates to YYYY-MM. Present=current=true. Return ONLY JSON.`;
+}
+
+async function extractText(buffer: Buffer): Promise<string> {
   try {
     const pdfParse = (await import("pdf-parse")).default;
-    const result = await pdfParse(buffer, { max: 0 });
+    const result = await pdfParse(buffer);
     const text = (result.text || "").trim();
-    if (text.length > 50) {
-      console.log(`[LinkedIn PDF] pdf-parse: ${text.length} chars`);
-      return text;
-    }
-  } catch (e) {
-    console.warn("[LinkedIn PDF] pdf-parse failed:", e instanceof Error ? e.message : e);
-  }
+    if (text.length > 100) return text;
+  } catch { /* fallback */ }
 
-  // Layer 2: pdfjs-dist with coordinate-aware extraction
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const pdfjsLib = require("pdfjs-dist/legacy/build/pdf.js");
     pdfjsLib.GlobalWorkerOptions.workerSrc = "";
-    const doc = await pdfjsLib.getDocument({
-      data: new Uint8Array(buffer),
-      disableFontFace: true,
-      useSystemFonts: true,
-      verbosity: 0,
-    }).promise;
-
-    const allLines: string[] = [];
+    const doc = await pdfjsLib.getDocument({ data: new Uint8Array(buffer), verbosity: 0 }).promise;
+    const lines: string[] = [];
     for (let p = 1; p <= doc.numPages; p++) {
-      try {
-        const page = await doc.getPage(p);
-        const content = await page.getTextContent();
-        const byY = new Map<number, { x: number; str: string }[]>();
-        for (const item of content.items) {
-          if (!("str" in item) || !item.str?.trim()) continue;
-          // @ts-expect-error pdfjs types
-          const y = Math.round(item.transform[5]);
-          // @ts-expect-error pdfjs types
-          const x = Math.round(item.transform[4]);
-          if (!byY.has(y)) byY.set(y, []);
-          byY.get(y)!.push({ x, str: item.str });
-        }
-        for (const y of Array.from(byY.keys()).sort((a, b) => b - a)) {
-          const row = byY.get(y)!.sort((a, b) => a.x - b.x);
-          const line = row.map((r) => r.str).join(" ").trim();
-          if (line) allLines.push(line);
-        }
-      } catch { /* skip bad page */ }
-    }
-    const text = allLines.join("\n").trim();
-    if (text.length > 50) {
-      console.log(`[LinkedIn PDF] pdfjs: ${text.length} chars`);
-      return text;
-    }
-  } catch (e) {
-    console.warn("[LinkedIn PDF] pdfjs failed:", e instanceof Error ? e.message : e);
-  }
-
-  // Layer 3: Raw PDF stream extraction
-  try {
-    const raw = buffer.toString("latin1");
-    const chunks: string[] = [];
-    const btEt = /BT[\s\S]*?ET/g;
-    let m: RegExpExecArray | null;
-    while ((m = btEt.exec(raw)) !== null) {
-      const strRe = /\(([^)\\]*(?:\\.[^)\\]*)*)\)\s*(?:Tj|'|")/g;
-      let sm: RegExpExecArray | null;
-      while ((sm = strRe.exec(m[0])) !== null) {
-        let s = sm[1] || "";
-        s = s.replace(/\\(\d{3})/g, (_, o) => String.fromCharCode(parseInt(o, 8)));
-        s = s.replace(/\\n/g, " ").replace(/\\r/g, "").replace(/\\\\/g, "\\").replace(/\\(.)/g, "$1");
-        if (s.trim()) chunks.push(s);
+      const page = await doc.getPage(p);
+      const content = await page.getTextContent();
+      const byY = new Map<number, {x: number; str: string}[]>();
+      for (const item of content.items) {
+        if (!("str" in item) || !item.str?.trim()) continue;
+        // @ts-expect-error pdfjs
+        const y = Math.round(item.transform[5]);
+        // @ts-expect-error pdfjs
+        const x = Math.round(item.transform[4]);
+        if (!byY.has(y)) byY.set(y, []);
+        byY.get(y)!.push({ x, str: item.str });
+      }
+      for (const y of Array.from(byY.keys()).sort((a, b) => b - a)) {
+        const line = byY.get(y)!.sort((a, b) => a.x - b.x).map(r => r.str).join(" ");
+        if (line.trim()) lines.push(line.trim());
       }
     }
-    const text = chunks.join(" ").replace(/\s+/g, " ").trim();
-    if (text.length > 50) {
-      console.log(`[LinkedIn PDF] raw stream: ${text.length} chars`);
-      return text;
-    }
+    const text = lines.join("\n");
+    if (text.length > 50) return text;
   } catch { /* ignore */ }
 
   return "";
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function sanitize(raw: any) {
+  const p = raw?.personal || {};
+  return {
+    personal: {
+      name: String(p.name || "").slice(0, 120),
+      email: String(p.email || "").toLowerCase().slice(0, 200),
+      phone: String(p.phone || "").slice(0, 50),
+      location: String(p.location || "").slice(0, 150),
+      linkedin: String(p.linkedin || "").slice(0, 300),
+      portfolio: String(p.portfolio || "").slice(0, 300),
+      jobTitle: String(p.jobTitle || "").slice(0, 150),
+    },
+    summary: String(raw?.summary || "").slice(0, 2000),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    experience: (Array.isArray(raw?.experience) ? raw.experience : []).slice(0, 20).map((e: any) => ({
+      company: String(e.company || "").slice(0, 150),
+      title: String(e.title || "").slice(0, 150),
+      location: String(e.location || "").slice(0, 150),
+      startDate: String(e.startDate || "").slice(0, 20),
+      endDate: String(e.endDate || "").slice(0, 20),
+      current: Boolean(e.current),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      bullets: (Array.isArray(e.bullets) ? e.bullets : []).map((b: any) => String(b).slice(0, 500)).filter(Boolean),
+    })),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    education: (Array.isArray(raw?.education) ? raw.education : []).map((e: any) => ({
+      school: String(e.school || "").slice(0, 200),
+      degree: String(e.degree || "").slice(0, 200),
+      field: String(e.field || "").slice(0, 200),
+      location: String(e.location || "").slice(0, 150),
+      startDate: String(e.startDate || "").slice(0, 20),
+      endDate: String(e.endDate || "").slice(0, 20),
+      gpa: String(e.gpa || "").slice(0, 15),
+    })),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    skills: (Array.isArray(raw?.skills) ? raw.skills : []).slice(0, 60).map((s: any) => String(s).slice(0, 100)).filter(Boolean),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    certifications: (Array.isArray(raw?.certifications) ? raw.certifications : []).slice(0, 10).map((c: any) => ({
+      name: String(c.name || "").slice(0, 200),
+      issuer: String(c.issuer || "").slice(0, 200),
+      date: String(c.date || "").slice(0, 20),
+      url: String(c.url || "").slice(0, 300),
+    })),
+  };
 }
 
 export async function POST(req: NextRequest) {
@@ -102,81 +110,136 @@ export async function POST(req: NextRequest) {
   try {
     const formData = await req.formData();
     const file = formData.get("file") as File | null;
-
     if (!file) return NextResponse.json({ error: "No file provided" }, { status: 400 });
-    if (file.size > 5 * 1024 * 1024) return NextResponse.json({ error: "File too large (max 5MB)" }, { status: 400 });
+    if (file.size > 10 * 1024 * 1024) return NextResponse.json({ error: "File too large (max 10MB)" }, { status: 400 });
 
     filename = file.name;
     const bytes = await file.arrayBuffer();
     const buffer = Buffer.from(bytes);
-
-    // Extract text
-    let rawText = "";
     const isPDF = filename.toLowerCase().endsWith(".pdf") || buffer.slice(0, 4).toString("ascii") === "%PDF";
-    if (isPDF) {
-      rawText = await extractPDFText(buffer);
-    } else {
-      rawText = cleanText(buffer.toString("utf-8"));
+
+    const geminiKey = process.env.GOOGLE_AI_API_KEY || process.env.GEMINI_API_KEY;
+    const groqKey = process.env.GROQ_API_KEY;
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let parsed: any = null;
+    let provider = "regex";
+    let parseAccuracy = 60;
+
+    // Strategy 1: Gemini Vision (best for LinkedIn PDFs with complex layout)
+    if (geminiKey && isPDF) {
+      const base64 = buffer.toString("base64");
+      const models = ["gemini-2.0-flash", "gemini-1.5-flash-latest", "gemini-2.0-flash-lite"];
+      for (const model of models) {
+        try {
+          const res = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiKey}`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                contents: [{
+                  parts: [
+                    { inline_data: { mime_type: "application/pdf", data: base64 } },
+                    { text: buildPrompt() }
+                  ]
+                }],
+                generationConfig: { responseMimeType: "application/json", temperature: 0.05, maxOutputTokens: 8192 },
+              }),
+              signal: AbortSignal.timeout(30000),
+            }
+          );
+          if (res.status === 429 || res.status === 404) { continue; }
+          if (!res.ok) continue;
+          const d = await res.json();
+          const text = d?.candidates?.[0]?.content?.parts?.[0]?.text;
+          if (text) {
+            parsed = sanitize(JSON.parse(text));
+            provider = "gemini-vision";
+            parseAccuracy = 97;
+            console.log(`[LinkedIn] Gemini Vision ${model} success`);
+            break;
+          }
+        } catch { continue; }
+      }
     }
-    rawText = cleanText(rawText);
 
-    console.log(`[LinkedIn PDF] "${filename}" → ${rawText.length} chars extracted`);
+    // Strategy 2: Extract text + Groq 70B
+    if (!parsed) {
+      const rawText = isPDF ? await extractText(buffer) : buffer.toString("utf-8");
+      console.log(`[LinkedIn] Extracted ${rawText.length} chars`);
 
-    // AI parsing (Gemini → Groq → regex)
-    const aiResult = await parseResumeWithAI(rawText);
-    console.log(`[LinkedIn PDF] Provider: ${aiResult.provider}, acc: ${aiResult.parseAccuracy}%, name: "${aiResult.data.personal.name}"`);
+      if (groqKey && rawText.length > 50) {
+        const models = ["llama-3.3-70b-versatile", "llama-3.1-70b-versatile", "llama-3.1-8b-instant"];
+        for (const model of models) {
+          try {
+            const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+              method: "POST",
+              headers: { "Content-Type": "application/json", Authorization: `Bearer ${groqKey}` },
+              body: JSON.stringify({
+                model,
+                messages: [
+                  { role: "system", content: "Expert resume/LinkedIn profile parser. Return only valid JSON." },
+                  { role: "user", content: `${buildPrompt()}\n\nTEXT:\n${rawText.slice(0, 30000)}` }
+                ],
+                temperature: 0.05, max_tokens: 8192,
+                response_format: { type: "json_object" },
+              }),
+              signal: AbortSignal.timeout(25000),
+            });
+            if (res.status === 429) continue;
+            if (!res.ok) continue;
+            const d = await res.json();
+            const raw = d?.choices?.[0]?.message?.content;
+            if (raw) {
+              parsed = sanitize(JSON.parse(raw));
+              provider = "groq";
+              parseAccuracy = 93;
+              console.log(`[LinkedIn] Groq ${model} success`);
+              break;
+            }
+          } catch { continue; }
+        }
+      }
 
-    const ai = aiResult.data;
+      // Strategy 3: Regex fallback
+      if (!parsed) {
+        const { parseResumeWithAI } = await import("@/lib/ai-resume-parser");
+        const result = await parseResumeWithAI(rawText);
+        parsed = result.data;
+        provider = result.provider;
+        parseAccuracy = result.parseAccuracy;
+      }
+    }
+
     const warnings: string[] = [];
-    if (rawText.length < 100) warnings.push("⚠️ Very little text extracted — LinkedIn PDFs sometimes need the text-based export");
-    if (!ai.personal.name) warnings.push("⚠️ Name not detected — try the Paste Text method instead");
+    if (!parsed.personal?.name) warnings.push("⚠️ Name not detected — try Paste Text method");
+    if (parsed.experience?.length === 0) warnings.push("⚠️ No experience found");
 
-    const parsed = {
-      id: Math.random().toString(36).substring(2, 10),
-      filename,
-      parsedAt: new Date().toISOString(),
-      parseAccuracy: aiResult.parseAccuracy,
-      provider: aiResult.provider,
-      warnings,
-      personal: ai.personal,
-      summary: ai.summary,
-      experience: ai.experience.map((e) => ({
-        company: e.company,
-        title: e.title,
-        location: e.location,
-        startDate: e.startDate,
-        endDate: e.endDate,
-        current: e.current,
-        bullets: e.bullets.filter(Boolean),
-      })),
-      education: ai.education,
-      skills: ai.skills,
-      certifications: ai.certifications,
-    };
-
-    return NextResponse.json({
-      success: true,
-      data: parsed,
-      rawPreview: rawText.substring(0, 2000),
-      meta: { textLength: rawText.length, isLinkedIn: true, provider: aiResult.provider, parseAccuracy: aiResult.parseAccuracy },
-    });
-
-  } catch (err) {
-    console.error("[LinkedIn PDF] Critical error:", err);
     return NextResponse.json({
       success: true,
       data: {
         id: Math.random().toString(36).substring(2, 10),
-        filename,
-        parsedAt: new Date().toISOString(),
-        parseAccuracy: 0,
-        provider: "error",
-        warnings: ["⚠️ PDF parsing failed — try the Paste Text method instead"],
-        personal: { name: "", email: "", phone: "", linkedin: "", location: "", portfolio: "", jobTitle: "" },
+        filename, parsedAt: new Date().toISOString(),
+        parseAccuracy, provider, warnings, ...parsed,
+      },
+      rawPreview: (await extractText(buffer)).substring(0, 2000),
+      meta: { provider, parseAccuracy, isLinkedIn: true },
+    });
+
+  } catch (err) {
+    console.error("[LinkedIn PDF] Error:", err);
+    return NextResponse.json({
+      success: true,
+      data: {
+        id: Math.random().toString(36).substring(2, 10),
+        filename, parsedAt: new Date().toISOString(),
+        parseAccuracy: 0, provider: "error",
+        warnings: ["PDF parsing failed — try Paste Text instead"],
+        personal: { name:"",email:"",phone:"",linkedin:"",location:"",portfolio:"",jobTitle:"" },
         summary: "", experience: [], education: [], skills: [], certifications: [],
       },
-      rawPreview: "",
-      meta: { textLength: 0, isLinkedIn: true },
+      rawPreview: "", meta: { provider: "error", parseAccuracy: 0, isLinkedIn: true },
     });
   }
 }
